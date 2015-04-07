@@ -62,10 +62,66 @@ hasintercept <- function(term) {
 		attr( terms(term) , "intercept" )==1
 }
 
-expand_slash <- function(ranef_expr){
-
+clean_name <- function(ranef_expr){
+	return(undot(deparse(ranef_expr)))
 }
 
+expand_slash <- function(ranef_expr){
+	ranef_name <- clean_name(ranef_expr[[3]])
+	var <- list()
+	if(regexec(pattern = '/', fixed = TRUE, text = ranef_name) == -1) {
+		return(ranef_expr)
+	} else {
+		vars <- strsplit(ranef_name,split = '/',fixed=TRUE)[[1]]
+		len_vars <- length(vars)
+		if(len_vars > 2)
+			stop('Only supports maximum of 1 "/"')
+		interact_ranef_name <- paste(vars[1],vars[2],sep=':')
+		ranef_expr[[3]] <- as.name(vars[1])
+		interact_to_bars <- findbars(as.formula(paste('~ (1 | ',interact_ranef_name, ')', sep='')))
+	}
+	return(list(ranef_expr,interact_to_bars))
+}
+
+corr_re_test <- function(ranef_expr){
+	if(length(ranef_expr[[2]]) == 1){
+	 return(TRUE)	
+	} else if(deparse(ranef_expr[[2]][[2]]) != '0'){
+		return(TRUE)
+	} else {
+		return(FALSE)
+	}
+}
+
+build_ranefs <- function(var_list, corr_list, data){
+	num_re <- length(var_list)
+	names_re <- sapply(var_list, function(i) clean_name(i[[3]]))
+  ranef <- sapply(1:num_re,function(i) setNames(vector(mode='list',length=2),c('corr','uncorr')),simplify=FALSE)
+	ranef <- setNames(ranef,names_re)
+	group_inds_list <- list()
+	for(i in 1:num_re){
+		v <- var_list[[i]][[2]]
+		name <- names_re[i]
+		corr <- corr_list[[i]]
+		v_class <- class(v)
+		if (v_class =="numeric") {
+			if (corr){
+				ranef[[ name ]]$corr <- c("(Intercept)",ranef$corr[[name]])
+			} else {
+				ranef[[name]]$uncorr <- c("(Intercept)",ranef$uncorr[[name]])
+			}
+		} else {
+				f <- as.formula( paste( "~-1+" , deparse( v ) , sep="" ) )
+				if(corr){
+					ranef[[ name ]]$corr <- c(ranef[[name]]$corr,colnames( model.matrix( f , data ) ))
+				} else {
+					ranef[[ name ]]$uncorr <- c(ranef[[name]]$uncorr,colnames( model.matrix( f , data ) ))
+				}
+		}
+		group_inds_list[[name]] <- with(data, eval(var_list[[i]][[3]]))
+	}
+	return(list(ranef = ranef, group_inds_list = group_inds_list))
+}
 
 xparse_glimmer_formula <- function( formula , data ) {
     ## take a formula and parse into fixed effect and varying effect lists
@@ -99,45 +155,18 @@ xparse_glimmer_formula <- function( formula , data ) {
         ranef <- list()
     } else {
         # find varying effects list
-        var <- findbars( formula )
-        ranef <- list()
-				sapply(var,function(i) print(i))
-				i <- 1
-        while (i <= length(var)) {
-          str_name <- deparse( var[[i]][[3]] )
-					name <- undot(str_name)
-					if(regexec(pattern = '/', fixed = TRUE, text = name) != -1) {
-						vars <- strsplit(name,split = '/',fixed=TRUE)[[1]]
-						len_vars <- length(vars)
-						if(len_vars > 2)
-							stop('Only supports maximum of 1 "/"')
-						interact_name <- paste(vars[1],vars[2],sep=':')
-						var[[i]][[3]] <- as.name(vars[1])
-						interact_to_bars <- findbars(as.formula(paste('~ (1 | ',interact_name, ')', sep='')))
-						var <- c(var,interact_to_bars)
-						name <- vars[1]
-					} else if(ifelse(length(var[[i]][[2]]) > 1, 
-													 ifelse(deparse(var[[i]][[2]][[2]]) == '0', TRUE, FALSE), FALSE)){
-					}
-					des_frame_fixef[[name]] <- with(data, eval(var[[i]][[3]]))
-					
-					# parse formula
-					v <- var[[i]][[2]]
-					if ( class(v)=="numeric" ) {
-							# just intercept
-							ranef[[ name ]] <- c("(Intercept)",ranef[[name]])
-					} else {
-							# should be class "call" or "name"
-							# need to convert formula to model matrix headers
-							f <- as.formula( paste( "~-1+" , deparse( v ) , sep="" ) )
-							ranef[[ name ]] <- c(ranef[[name]],colnames( model.matrix( f , data ) ))
-					}
-					i <- i + 1
-        }
+        var <- findbars(formula)
+				var_mod <- sapply(var, function(i) expand_slash(i))
+				var_mod <- unlist(var_mod, recursive=FALSE)
+				corr_uncorr <- sapply(var_mod, function(i) corr_re_test(i))
+				ranef <- build_ranefs(var_mod, corr_uncorr, data)
+				inds <- do.call(cbind,ranef$group_inds_list)
+				names(inds) <- names(ranef$group_inds_list)
+				des_frame_fixef <- cbind(des_frame_fixef,inds)
     }
     
     # result sufficient information to build Stan model code
-    list( y=outcome , yname=outcome_name , fixef=fixef , ranef=ranef , dat=as.data.frame(des_frame_fixef), var = var)
+    list( y=outcome , yname=outcome_name , fixef=fixef , ranef=ranef$ranef , dat=des_frame_fixef, var = var_mod)
 }
 
 
@@ -205,7 +234,7 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
     } else {
         pf$dat[[pf$yname]] <- pf$y
     }
-    flist[[1]] <- concat( as.character(pf$yname) , " ~ " , dtext )
+    flist[[1]] <- concat(as.character(pf$yname) ," ~ " , dtext)
     
     # build fixed linear model
     flm <- ""
@@ -230,7 +259,6 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
     if ( num_group_vars > 0 ) {
     for ( i in 1:num_group_vars ) {
         group_var <- undot(names(pf$ranef)[i])
-				print(group_var)
         members <- list()
         for ( j in 1:length(pf$ranef[[i]]) ) {
             aterm <- undot(pf$ranef[[i]][j])
@@ -244,7 +272,6 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
                 par_name <- concat( var_prefix , aterm )
                 newterm <- concat( par_name , "[" , group_var , "]" , "*" , aterm )
             }
-						print(par_name)
             members[[par_name]] <- par_name
             if ( i > 1 | j > 1 ) vlm <- concat( vlm , " +\n        " )
             vlm <- concat( vlm , newterm )
