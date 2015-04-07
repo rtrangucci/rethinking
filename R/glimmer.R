@@ -2,119 +2,142 @@
 # translate glmer style model formulas into equivalent formula alist suitable for map2stan
 # just a stub for now
 
+undot <- function( astring ) {
+    astring <- gsub( "." , "_" , astring , fixed=TRUE )
+    astring <- gsub( ":" , "_X_" , astring , fixed=TRUE )
+    astring <- gsub( "(" , "" , astring , fixed=TRUE )
+    astring <- gsub( ")" , "" , astring , fixed=TRUE )
+    astring
+}
+
+concat <- function( ... ) {
+  paste( ... , collapse="" , sep="" )
+}
+
+coerce_index <- function( x ) as.integer(as.factor(as.character(x)))
+
+nobars <- function(term) {
+		if (!('|' %in% all.names(term))) return(term)
+		if (is.call(term) && term[[1]] == as.name('|')) return(NULL)
+		if (length(term) == 2) {
+		nb <- nobars(term[[2]])
+		if (is.null(nb)) return(NULL)
+		term[[2]] <- nb
+		return(term)
+		}
+		nb2 <- nobars(term[[2]])
+		nb3 <- nobars(term[[3]])
+		if (is.null(nb2)) return(nb3)
+		if (is.null(nb3)) return(nb2)
+		term[[2]] <- nb2
+		term[[3]] <- nb3
+		term
+}
+
+findbars <- function(term) {
+		if (is.name(term) || !is.language(term)) return(NULL)
+		if (term[[1]] == as.name("(")) return(findbars(term[[2]]))
+		if (!is.call(term)) stop("term must be of class call")
+		if (term[[1]] == as.name('|')) return(term)
+		if (length(term) == 2) return(findbars(term[[2]]))
+		c(findbars(term[[2]]), findbars(term[[3]]))
+}
+
+subbars <- function(term)
+### Substitute the '+' function for the '|' function
+{
+		if (is.name(term) || !is.language(term)) return(term)
+		if (length(term) == 2) {
+		term[[2]] <- subbars(term[[2]])
+		return(term)
+		}
+		stopifnot(length(term) >= 3)
+		if (is.call(term) && term[[1]] == as.name('|'))
+		term[[1]] <- as.name('+')
+		for (j in 2:length(term)) term[[j]] <- subbars(term[[j]])
+		term
+}
+
+hasintercept <- function(term) {
+		attr( terms(term) , "intercept" )==1
+}
+
+expand_slash <- function(ranef_expr){
+
+}
+
+
 xparse_glimmer_formula <- function( formula , data ) {
     ## take a formula and parse into fixed effect and varying effect lists
-    nobars <- function(term) {
-        if (!('|' %in% all.names(term))) return(term)
-        if (is.call(term) && term[[1]] == as.name('|')) return(NULL)
-        if (length(term) == 2) {
-        nb <- nobars(term[[2]])
-        if (is.null(nb)) return(NULL)
-        term[[2]] <- nb
-        return(term)
-        }
-        nb2 <- nobars(term[[2]])
-        nb3 <- nobars(term[[3]])
-        if (is.null(nb2)) return(nb3)
-        if (is.null(nb3)) return(nb2)
-        term[[2]] <- nb2
-        term[[3]] <- nb3
-        term
-    }
-    findbars <- function(term) {
-        if (is.name(term) || !is.language(term)) return(NULL)
-        if (term[[1]] == as.name("(")) return(findbars(term[[2]]))
-        if (!is.call(term)) stop("term must be of class call")
-        if (term[[1]] == as.name('|')) return(term)
-        if (length(term) == 2) return(findbars(term[[2]]))
-        c(findbars(term[[2]]), findbars(term[[3]]))
-    }
-    subbars <- function(term)
-    ### Substitute the '+' function for the '|' function
-    {
-        if (is.name(term) || !is.language(term)) return(term)
-        if (length(term) == 2) {
-        term[[2]] <- subbars(term[[2]])
-        return(term)
-        }
-        stopifnot(length(term) >= 3)
-        if (is.call(term) && term[[1]] == as.name('|'))
-        term[[1]] <- as.name('+')
-        for (j in 2:length(term)) term[[j]] <- subbars(term[[j]])
-        term
-    }
-    hasintercept <- function(term) {
-        attr( terms(term) , "intercept" )==1
-    }
     
     # find fixed effects list by deleting random effects and expanding
-    f_nobars <- nobars( formula )
+    f_nobars <- nobars(formula) ## Makes a single fixed effects formula
     # catch implied intercept error -- happens when right side of formula is only () blocks
-    if ( class(f_nobars)=="name" & length(f_nobars)==1 ) {
-        f_nobars <- nobars( as.formula( paste( deparse(formula) , "+ 1" ) ) )
+    if (class(f_nobars)=="name" & length(f_nobars)==1) {
+        f_nobars <- nobars(as.formula(paste(deparse(formula), "+ 1" )))
     }
-    fixef <- colnames( model.matrix( f_nobars , data ) )
+    
+    ## gets names of fixed  effects from colums of of data frame output by model.matrix
+    
+		des_frame_fixef <- as.data.frame(model.matrix( f_nobars , data ))
+    fixef <- names(des_frame_fixef)  
     
     # convert to all fixed effects and build needed model matrix
-    mdat <- model.matrix( subbars( formula ) , data )
-    outcome_name <- deparse( f_nobars[[2]] )
-    # mdat <- cbind( data[[outcome_name]] , mdat )
-    # colnames(mdat)[1] <- outcome_name
-    outcome <- model.frame( f_nobars , data )[,1]
-    if ( class(outcome)=="matrix" ) {
+    # used to be des_frame_fixef <- as.data.frame(model.matrix( subbars( formula ) , data ))
+    outcome_name <- deparse(f_nobars[[2]])
+    # des_frame_fixef <- cbind( data[[outcome_name]] , des_frame_fixef )
+    # colnames(des_frame_fixef)[1] <- outcome_name
+    outcome <- model.frame(f_nobars, data)[,1]
+    if (class(outcome) == "matrix") {
         # fix outcome name
-        outcome_name <- colnames( outcome )[1]
+        outcome_name <- colnames(outcome)[1]
     }
     
     # check for any varying effects
-    if ( formula == nobars(formula) ) {
+    if (formula == nobars(formula)) {
         # no varying effects
         ranef <- list()
     } else {
         # find varying effects list
         var <- findbars( formula )
         ranef <- list()
-        for ( i in 1:length(var) ) {
-            name <- all.vars( var[[i]][[3]] )
-
-            if ( FALSE ) { # check index variables?
-                if ( TRUE ) {
-                    # check that grouping vars are class integer
-                    if ( class( data[[name]] )!="integer" ) {
-                        stop( paste( "Grouping variables must be integer type. '" , name , "' is instead of type: " , class( data[[name]] ) , "." , sep="" ) )
-                    }
-                    # check that values are contiguous
-                    if ( min(data[[name]]) != 1 ) 
-                        stop( paste( "Group variable '" , name , "' doesn't start at index 1." , sep="" ) )
-                    ulist <- unique( data[[name]] )
-                    diffs <- ulist[2:length(ulist)] - ulist[1:(length(ulist)-1)]
-                    if ( any(diffs != 1) )
-                        stop( paste( "Group variable '" , name , "' is not contiguous." , sep="" ) )
-                } else {
-                    # new code to coerce grouping vars to type integer
-                    # first, save the labels by converting to character
-                    #glabels <- as.character( data[[name]] )
-                    # second, coerce to factor then integer to make contiguous integer index
-                    mdat[,name] <- as.integer( as.factor( mdat[,name] ) )
-                }
-            }
-            
-            # parse formula
-            v <- var[[i]][[2]]
-            if ( class(v)=="numeric" ) {
-                # just intercept
-                ranef[[ name ]] <- "(Intercept)"
-            } else {
-                # should be class "call" or "name"
-                # need to convert formula to model matrix headers
-                f <- as.formula( paste( "~" , deparse( v ) , sep="" ) )
-                ranef[[ name ]] <- colnames( model.matrix( f , data ) )
-            }
+				sapply(var,function(i) print(i))
+				i <- 1
+        while (i <= length(var)) {
+          str_name <- deparse( var[[i]][[3]] )
+					name <- undot(str_name)
+					if(regexec(pattern = '/', fixed = TRUE, text = name) != -1) {
+						vars <- strsplit(name,split = '/',fixed=TRUE)[[1]]
+						len_vars <- length(vars)
+						if(len_vars > 2)
+							stop('Only supports maximum of 1 "/"')
+						interact_name <- paste(vars[1],vars[2],sep=':')
+						var[[i]][[3]] <- as.name(vars[1])
+						interact_to_bars <- findbars(as.formula(paste('~ (1 | ',interact_name, ')', sep='')))
+						var <- c(var,interact_to_bars)
+						name <- vars[1]
+					} else if(ifelse(length(var[[i]][[2]]) > 1, 
+													 ifelse(deparse(var[[i]][[2]][[2]]) == '0', TRUE, FALSE), FALSE)){
+					}
+					des_frame_fixef[[name]] <- with(data, eval(var[[i]][[3]]))
+					
+					# parse formula
+					v <- var[[i]][[2]]
+					if ( class(v)=="numeric" ) {
+							# just intercept
+							ranef[[ name ]] <- c("(Intercept)",ranef[[name]])
+					} else {
+							# should be class "call" or "name"
+							# need to convert formula to model matrix headers
+							f <- as.formula( paste( "~-1+" , deparse( v ) , sep="" ) )
+							ranef[[ name ]] <- c(ranef[[name]],colnames( model.matrix( f , data ) ))
+					}
+					i <- i + 1
         }
     }
     
     # result sufficient information to build Stan model code
-    list( y=outcome , yname=outcome_name , fixef=fixef , ranef=ranef , dat=as.data.frame(mdat) )
+    list( y=outcome , yname=outcome_name , fixef=fixef , ranef=ranef , dat=as.data.frame(des_frame_fixef), var = var)
 }
 
 
@@ -207,6 +230,7 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
     if ( num_group_vars > 0 ) {
     for ( i in 1:num_group_vars ) {
         group_var <- undot(names(pf$ranef)[i])
+				print(group_var)
         members <- list()
         for ( j in 1:length(pf$ranef[[i]]) ) {
             aterm <- undot(pf$ranef[[i]][j])
@@ -220,6 +244,7 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
                 par_name <- concat( var_prefix , aterm )
                 newterm <- concat( par_name , "[" , group_var , "]" , "*" , aterm )
             }
+						print(par_name)
             members[[par_name]] <- par_name
             if ( i > 1 | j > 1 ) vlm <- concat( vlm , " +\n        " )
             vlm <- concat( vlm , newterm )
@@ -239,7 +264,8 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
         }
         # make sure grouping variables in dat
         # also ensure is an integer index
-        pf$dat[[group_var]] <- coerce_index( data[[group_var]] )
+        pf$dat[[group_var]] <- coerce_index(pf$dat[,group_var])
+        ## Used to be pf$dat[[group_var]] <- coerce_index( data[[group_var]] )
     }#i
     }# ranef processing
     
@@ -286,41 +312,3 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
     invisible(list(f=flist2,d=pf$dat))
     
 }
-
-
-####### TEST CODE ########
-if ( FALSE ) {
-
-library(rethinking)
-
-data(chimpanzees)
-f0 <- pulled.left ~ prosoc.left*condition - condition
-m0 <- glimmer( f0 , chimpanzees , family=binomial )
-
-f1 <- pulled.left ~ (1|actor) + prosoc.left*condition - condition
-m1 <- glimmer( f1 , chimpanzees , family=binomial )
-# m1s <- map2stan( m1$f , data=m1$d , sample=TRUE )
-
-f2 <- pulled.left ~ (1+prosoc.left|actor) + prosoc.left*condition - condition
-m2 <- glimmer( f2 , chimpanzees , family=binomial )
-
-data(UCBadmit)
-f3 <- cbind(admit,reject) ~ (1|dept) + applicant.gender
-m3 <- glimmer( f3 , UCBadmit , binomial )
-m3s <- map2stan( m3$f , data=m3$d )
-
-f4 <- cbind(admit,reject) ~ (1+applicant.gender|dept) + applicant.gender
-m4 <- glimmer( f4 , UCBadmit , binomial )
-m4s <- map2stan( m4$f , data=m4$d )
-
-data(Trolley)
-f5 <- response ~ (1|id) + (1|story) + action + intention + contact
-m5 <- glimmer( f5 , Trolley )
-m5s <- map2stan( m5$f , m5$d , sample=FALSE )
-
-f6 <- response ~ (1+action+intention|id) + (1+action+intention|story) + action + intention + contact
-m6 <- glimmer( f6 , Trolley )
-m6s <- map2stan( m6$f , m6$d , sample=TRUE )
-
-}
-
