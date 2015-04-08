@@ -260,23 +260,29 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
     for ( i in 1:num_group_vars ) {
         group_var <- undot(names(pf$ranef)[i])
         members <- list()
-        for ( j in 1:length(pf$ranef[[i]]) ) {
-            aterm <- undot(pf$ranef[[i]][j])
+				ranef <- c(pf$ranef[[i]]$corr,pf$ranef[[i]]$uncorr)
+        for (j in 1:length(ranef)) {
+            aterm <- undot(ranef[[j]])
             newterm <- ""
             var_prefix <- prefix[2]
-            if ( num_group_vars>1 ) var_prefix <- concat( var_prefix , group_var , "_" )
-            if ( aterm=="Intercept" ) {
-                par_name <- concat( var_prefix , aterm )
-                newterm <- concat( par_name , "[" , group_var , "]" )
+            if (num_group_vars>1) var_prefix <- concat(var_prefix, group_var, "_")
+            if (aterm == "Intercept") {
+                par_name <- concat(var_prefix, aterm)
+                newterm <- concat(par_name, "[", group_var, "]")
             } else {
-                par_name <- concat( var_prefix , aterm )
-                newterm <- concat( par_name , "[" , group_var , "]" , "*" , aterm )
+                par_name <- concat(var_prefix, aterm)
+                newterm <- concat(par_name, "[", group_var, "]", "*", aterm)
             }
             members[[par_name]] <- par_name
             if ( i > 1 | j > 1 ) vlm <- concat( vlm , " +\n        " )
             vlm <- concat( vlm , newterm )
+            print(paste('Iteration:', i, j))
+						print(vlm)
+						print(newterm)
         }#j
         # add group prior
+#				print(paste('Iteration: ',i))
+#				print(members)
         if ( length(members)>1 ) {
             # multi_normal
             gvar_name <- concat( "c(" , paste(members,collapse=",") , ")" , "[" , group_var , "]" )
@@ -337,5 +343,4 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
     cat(flist_txt)
     cat("\n")
     invisible(list(f=flist2,d=pf$dat))
-    
 }
