@@ -149,7 +149,7 @@ build_priors <- function(member, group_var) {
 }
 
 apply_build_priors <- function(members, group_var) {
-  prior_list <- list()
+  prior_list <- NULL
   if(length(members) < 1)
     return(prior_list)
   for (i in 1:length(members))
@@ -187,6 +187,7 @@ xparse_glimmer_formula <- function( formula , data ) {
     if (formula == nobars(formula)) {
         # no varying effects
         ranef <- list()
+      var_mod <- list()
     } else {
         # find varying effects list
         var <- findbars(formula)
@@ -317,6 +318,8 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
         prior_list[[gvar_name]] <- concat( "dmvnorm2(0,sigma_" , group_var , ",Rho_" , group_var , ")" )
         prior_list[[concat("sigma_",group_var)]] <- concat( "dcauchy(0,2)" )
         prior_list[[concat("Rho_",group_var)]] <- concat( "dlkjcorr(2)" )
+        prior_list_uncorr_members <- apply_build_priors(uncorr_members,group_var)
+        prior_list <- c(prior_list, prior_list_uncorr_members)
       } else {
           prior_list_uncorr_members <- apply_build_priors(uncorr_members,group_var)
           if (length(corr_members) == 1)
@@ -361,6 +364,7 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
     }
     flist_txt <- concat( flist_txt , "\n)" )
     flist2 <- eval(parse(text=flist_txt))
+
     
     # clean variable names
     names(pf$dat) <- sapply( names(pf$dat) , undot )
