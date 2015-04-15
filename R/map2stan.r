@@ -14,7 +14,7 @@
 ##################
 # map2stan itself
 
-map2stan <- function( flist , data , start , pars , constraints=list() , types=list() , sample=TRUE , iter=2000 , warmup=floor(iter/2) , chains=1 , debug=FALSE , verbose=FALSE , WAIC=TRUE , cores=1 , rng_seed , ... ) {
+map2stan <- function( flist , data , start , pars , constraints=list() , types=list() , sample=TRUE , iter=2000 , warmup=floor(iter/2) , chains=1 , debug=FALSE , verbose=FALSE , WAIC=TRUE , cores=1 , rng_seed , scaled_multi_transform = TRUE, scaled_uni_transform = TRUE,... ) {
 
     indent <- "    " # 4 spaces
     
@@ -172,6 +172,13 @@ map2stan <- function( flist , data , start , pars , constraints=list() , types=l
         pattern <- paste( wild , target , wild , sep="" , collapse="" )
         m <- regexpr( pattern , x2 )
         return(m)
+    }
+
+    detectunivar <- function(name) {
+      res <- grep(name, pattern = '^((?<![c(]).)*[[]',perl = TRUE)
+      if(length(res) > 0)
+        return(TRUE)
+      else return(FALSE)
     }
     
     # for detecting index variables already in brackets '[id]'
@@ -597,7 +604,7 @@ map2stan <- function( flist , data , start , pars , constraints=list() , types=l
                 flag_mvprior <- FALSE
                 if ( length(RHS)>1 ) {
                     fname <- as.character( RHS[[1]] )
-                    if ( fname %in% c("dmvnorm","dmvnorm2","normal","multi_normal") )
+                    if ( fname %in% c("dmvnorm","dmvnorm2","dmvnormchol","normal","multi_normal") )
                         flag_mvprior <- TRUE
                 }
                 if ( flag_mvprior==FALSE ) {
@@ -694,6 +701,7 @@ map2stan <- function( flist , data , start , pars , constraints=list() , types=l
             # for each varying effect parameter, add index with group
             # also rename parameter in linear model, so can use vector data type in Stan
             n <- length( fp[['vprior']] )
+            print(fp[['vprior']])
             if ( n > 0 ) {
                 for ( j in 1:n ) {
                     vname <- paste( "vary_" , fp[['vprior']][[j]][['group']] , collapse="" , sep="" )
@@ -782,7 +790,7 @@ map2stan <- function( flist , data , start , pars , constraints=list() , types=l
                 }#find ndims
                 
                 # lkj_corr?
-                if ( tmplt$R_name=="dlkjcorr" ) {
+                if ( tmplt$R_name=="dlkjcorr" |  tmplt$R_name=="dlkjcorrchol") {
                     # just use identity matrix as initial value
                     if ( ndims > 0 ) {
                         start_prior[[ prior$par_out ]] <- diag(ndims)
@@ -829,10 +837,11 @@ map2stan <- function( flist , data , start , pars , constraints=list() , types=l
             tmplt <- templates[[vprior$template]]
             N_txt <- concat( "N_" , vprior$group )
             npars <- length(vprior$pars_out)
+            print(vprior$pars_out)
             
             # lhs -- if vector, need transformed parameter of vector type
             lhstxt <- ""
-            if ( length(vprior$pars_out) > 1 ) {
+            if ( npars > 1 ) {
                 # parameter vector
                 lhstxt <- paste( vprior$pars_out , collapse="_" )
                 lhstxt <- concat( "vec_" , lhstxt )
@@ -865,7 +874,7 @@ map2stan <- function( flist , data , start , pars , constraints=list() , types=l
             
             # add text to model code
             # new column vectorized normal and multi_normal
-            if ( vprior$density %in% c("multi_normal","normal") )
+            if ( vprior$density %in% c("multi_normal","normal",'multi_normal_cholesky') )
                 m_model_txt <- concat( m_model_txt , indent , lhstxt , " ~ " , vprior$density , "(" , rhstxt , ")" , vprior$T_text , ";\n" )
             else
                 m_model_txt <- concat( m_model_txt , indent , "for (j in 1:" , N_txt , ") " , lhstxt , "[j] ~ " , vprior$density , "(" , rhstxt , ")" , vprior$T_text , ";\n" )
