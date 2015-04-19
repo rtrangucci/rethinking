@@ -28,6 +28,47 @@ map2stan.templates <- list(
         },
         vectorized = TRUE
     ),
+    GaussianStd = list(
+        name = "GaussianStd",
+        R_name = "dnormstd",
+        stan_name = "normal",
+        num_pars = 2,
+        par_names = c("mu","sigma"),
+        par_bounds = c("","<lower=0>"),
+        par_types = c("real","real"),
+        out_type = "real",
+        par_map = function(k,e,...) {
+            indent <- "    "
+            # get constraints and add <lower=0> for sigma vector
+            constr_list <- get( "constraints" , envir=e )
+            prior_name <- get('xvp', envir=e)
+            n <- concat('N_',prior_name$group)
+            prior_name <- prior_name$pars_out
+            sigma_name <- as.character( k[[2]] )
+            mu_name <- as.character( k[[1]] )
+            m_tpars1 <- get( "m_tpars1" , envir=e )
+            m_tpars2 <- get( "m_tpars2" , envir=e )
+            if ( is.null(constr_list[[sigma_name]]) ) {
+                constr_list[[sigma_name]] <- "lower=0"
+                assign( "constraints" , constr_list , envir=e )
+            }
+            vname <- gsub(x = prior_name, pattern = '_std', replacement = '', fixed=TRUE)
+            m_tpars1 <- concat( m_tpars1 , indent , "vector[" , n , "] " , vname , ";\n" )
+            if(k[[1]] == 0){
+              txt_to_add <- concat(vname,  " <- " , sigma_name,' * ', as.character(prior_name))
+            } else {
+              txt_to_add <- concat(vname,  " <- " , mu_name,' + ',sigma_name,' * ', as.character(prior_name))
+            }
+            m_tpars2 <- concat( m_tpars2 , indent , txt_to_add, "; \n" )
+            
+            # assign tpars text to parent environment
+            assign( "m_tpars1" , m_tpars1 , envir=e )
+            assign( "m_tpars2" , m_tpars2 , envir=e )
+            k[[2]] <- 1
+            return(k);
+        },
+        vectorized = TRUE
+    ),
     StudentT = list(
         name = "StudentT",
         R_name = "dstudent",
@@ -91,117 +132,6 @@ map2stan.templates <- list(
                     kout[[1]] <- vname
                 }
             }
-            
-            # result
-            return(kout);
-        },
-        vectorized = FALSE
-    ),
-    MVGaussianStd = list(
-        # MVGaussChol with diag(sigma)*chol(Rho) for lower triangular covariance
-        name = "MVGaussianStd",
-        R_name = "dmvnormstd",
-        stan_name = "normal",
-        num_pars = 3,
-        par_names = c("Mu","Sigma","L_SigmaRho","Std_Norm"),
-        par_bounds = c("","lower=0","",""),
-        par_types = c("vector","vector","cholesky_factor_corr","matrix"),
-        out_type = "matrix",
-        par_map = function(k,e,n,...) {
-            # k is list of input parameters
-            # n is dimension of multi_normal
-            # e is calling environment
-            
-            # only going to need two slots in result
-            kout <- k
-            kout[[3]] <- NULL
-            
-            ###########
-            # Mu
-            
-            indent <- "    "
-            
-            # make sure Mu matches length
-            if ( class(k[[1]])=="numeric" ) {
-                # numeric means -- make sure match dimension
-                kout[[1]] <- concat( "rep_vector(" , k[[1]] , "," , n , ")" )
-            }
-            # check for vector of parameters in Mu
-            if ( class(k[[1]])=="call" ) {
-                fname <- as.character(k[[1]][[1]])
-                if ( fname=="c" ) {
-                    # vector, so constuct vector data type in Stan code
-                    # and add vector to transformed parameters
-                    pars <- list()
-                    for ( i in 2:(n+1) ) pars[[i-1]] <- as.character(k[[1]][[i]])
-                    vname <- concat( "Mu_" , paste(pars,collapse="") )
-                    
-                    # get tpars from parent
-                    m_tpars1 <- get( "m_tpars1" , envir=e )
-                    m_tpars2 <- get( "m_tpars2" , envir=e )
-                    
-                    # add declaration to transformed parameters
-                    m_tpars1 <- concat( m_tpars1 , indent , "vector[" , n , "] " , vname , ";\n" )
-                    # add transformation
-                    m_tpars2 <- concat( m_tpars2 , indent , "for (j in 1:" , n , ") {\n" )
-                    for ( i in 1:n ) {
-                        m_tpars2 <- concat( m_tpars2 , indent,indent , vname , "[" , i , "] <- " , pars[[i]] , ";\n" )
-                    }
-                    m_tpars2 <- concat( m_tpars2 , indent , "}\n" )
-                    
-                    # assign tpars text to parent environment
-                    assign( "m_tpars1" , m_tpars1 , envir=e )
-                    assign( "m_tpars2" , m_tpars2 , envir=e )
-                    
-                    # finally, replace k[[1]] with vector name
-                    kout[[1]] <- vname
-                }
-            }
-            
-            ###########
-            # Sigma and L_Rho
-            # construct cholesky factor of covariance matrix from
-            #   diag_matrix(Sigma)*L_Rho
-            # Then can specify separate priors on Sigma and Rho
-            # need to use transformed parameter for construction, 
-            #   so calc not repeated in loop
-            # Naming convention for cov_matrix: L_SigmaRho
-            
-            Sigma_name <- as.character(k[[2]])
-            Rho_name <- as.character(k[[3]])
-            Cov_name <- concat( Sigma_name ,'_', Rho_name )
-            
-            # get tpars from parent
-            m_tpars1 <- get( "m_tpars1" , envir=e )
-            m_tpars2 <- get( "m_tpars2" , envir=e )
-            
-            # build transformed parameter
-            m_tpars1 <- concat( m_tpars1 , indent , "matrix[" , n, ",", n , "] " , Cov_name , ";\n" )
-            m_tpars2 <- concat( m_tpars2 , indent , Cov_name , " <- diag_pre_multiply(" , Sigma_name , "," , Rho_name , ");\n" )
-            
-            # now replace name
-            kout[[2]] <- Cov_name
-            
-            # assign tpars text to parent environment
-            assign( "m_tpars1" , m_tpars1 , envir=e )
-            assign( "m_tpars2" , m_tpars2 , envir=e )
-            
-            # get types list and add corr_matrix
-            types_list <- get( "types" , envir=e )
-            types_list[[Rho_name]] <- concat("cholesky_factor_corr")
-            assign( "types" , types_list , envir=e )
-            
-            # get constraints and add <lower=0> for sigma vector
-            constr_list <- get( "constraints" , envir=e )
-            isnum <- function(x) {
-                xn <- suppressWarnings(as.numeric(x))
-                return( ifelse(is.na(xn),FALSE,TRUE) ) 
-            }
-            if ( !isnum(Sigma_name) )
-                if ( is.null(constr_list[[Sigma_name]]) ) {
-                    constr_list[[Sigma_name]] <- "lower=0"
-                    assign( "constraints" , constr_list , envir=e )
-                }
             
             # result
             return(kout);
@@ -676,6 +606,21 @@ map2stan.templates <- list(
         par_names = c("size","prob"),
         par_bounds = c("<lower=1>","<lower=0,upper=1>"),
         par_types = c("int","real"),
+        out_type = "int",
+        par_map = function(k,...) {
+            return(k);
+        },
+        vectorized = TRUE
+    ),
+    Bernoulli = list(
+        name = "Bernoulli",
+        R_name = "dbernoulli",
+        stan_name = "bernoulli",
+        nat_link = "logit",
+        num_pars = 1,
+        par_names = c("prob"),
+        par_bounds = c("<lower=0,upper=1>"),
+        par_types = c("real"),
         out_type = "int",
         par_map = function(k,...) {
             return(k);

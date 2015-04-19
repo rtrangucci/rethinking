@@ -174,13 +174,6 @@ map2stan <- function( flist , data , start , pars , constraints=list() , types=l
         return(m)
     }
 
-    detectunivar <- function(name) {
-      res <- grep(name, pattern = '^((?<![c(]).)*[[]',perl = TRUE)
-      if(length(res) > 0)
-        return(TRUE)
-      else return(FALSE)
-    }
-    
     # for detecting index variables already in brackets '[id]'
     detectindexvar <- function( target , x ) {
         #wild <- wildpatt
@@ -316,6 +309,9 @@ map2stan <- function( flist , data , start , pars , constraints=list() , types=l
                 pars[[i]] <- as.character( pars_raw[[i+1]] )
             }
         } else {
+            if(as.character(fl[[3]][[1]]) == 'dnormstd') {
+              pars_raw <- concat(pars_raw, '_std')
+            }
             pars[[1]] <- as.character( pars_raw )
         }
         
@@ -701,7 +697,6 @@ map2stan <- function( flist , data , start , pars , constraints=list() , types=l
             # for each varying effect parameter, add index with group
             # also rename parameter in linear model, so can use vector data type in Stan
             n <- length( fp[['vprior']] )
-            print(fp[['vprior']])
             if ( n > 0 ) {
                 for ( j in 1:n ) {
                     vname <- paste( "vary_" , fp[['vprior']][[j]][['group']] , collapse="" , sep="" )
@@ -837,7 +832,6 @@ map2stan <- function( flist , data , start , pars , constraints=list() , types=l
             tmplt <- templates[[vprior$template]]
             N_txt <- concat( "N_" , vprior$group )
             npars <- length(vprior$pars_out)
-            print(vprior$pars_out)
             
             # lhs -- if vector, need transformed parameter of vector type
             lhstxt <- ""
@@ -870,7 +864,8 @@ map2stan <- function( flist , data , start , pars , constraints=list() , types=l
                     klist[[j]] <- l$var # handles undotting
                 }
             }
-            rhstxt <- paste( klist , collapse=" , " )
+
+            rhstxt <- paste( klist , collapse=", " )
             
             # add text to model code
             # new column vectorized normal and multi_normal

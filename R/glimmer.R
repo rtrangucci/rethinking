@@ -2,6 +2,13 @@
 # translate glmer style model formulas into equivalent formula alist suitable for map2stan
 # just a stub for now
 
+detectunivar <- function(name) {
+  res <- grep(name, pattern = '^((?<![c(]).)*[[]',perl = TRUE)
+  if(length(res) > 0)
+    return(TRUE)
+  else return(FALSE)
+}
+    
 undot <- function( astring ) {
     astring <- gsub( "." , "_" , astring , fixed=TRUE )
     astring <- gsub( ":" , "_X_" , astring , fixed=TRUE )
@@ -139,21 +146,25 @@ build_name <- function(re, prefix, group_var, num_group_vars) {
   return(list(newterm = newterm, par_name = par_name))
 }
 
-build_priors <- function(member, group_var) {
+build_priors <- function(member, group_var, matt_trick) {
   prior_list <- list()
   gvar_name <- concat(member, "[", group_var, "]")
   prepend <- concat(member,'_')
-  prior_list[[gvar_name]] <- concat("dnorm(0,sigma_", prepend, group_var, ")")
+  if(matt_trick){
+    prior_list[[gvar_name]] <- concat("dnormstd(0,sigma_", prepend, group_var, ")")
+  } else {
+    prior_list[[gvar_name]] <- concat("dnorm(0,sigma_", prepend, group_var, ")")
+  }
   prior_list[[concat("sigma_",prepend,group_var)]] <- concat("dcauchy(0,2)")
   return(prior_list)
 }
 
-apply_build_priors <- function(members, group_var) {
+apply_build_priors <- function(members, group_var, matt_trick) {
   prior_list <- NULL
   if(length(members) < 1)
     return(prior_list)
   for (i in 1:length(members))
-    prior_list <- c(prior_list, build_priors(members[[i]], group_var))
+    prior_list <- c(prior_list, build_priors(members[[i]], group_var, matt_trick))
   return(prior_list)
 }
 
@@ -205,7 +216,7 @@ xparse_glimmer_formula <- function( formula , data ) {
 }
 
 
-glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , default_prior="dnorm(0,10)" , ... ) {
+glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , default_prior="dnorm(0,10)" , matt_trick = TRUE, ... ) {
     
     undot <- function( astring ) {
         astring <- gsub( "." , "_" , astring , fixed=TRUE )
@@ -258,8 +269,8 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
     if ( family=="binomial" ) {
         if ( class(pf$y)=="matrix" ) {
             # cbind input
-            pf$dat[[pf$yname]] <- pf$y[,1]
-            pf$dat[[concat(pf$yname,"_size")]] <- apply(pf$y,1,sum)
+            pf$dat[[pf$yname]] <- as.integer(pf$y[,1])
+            pf$dat[[concat(pf$yname,"_size")]] <- as.integer(apply(pf$y,1,sum))
             dtext <- concat("dbinom( ",concat(pf$yname,"_size")," , p )")
         } else {
             # bernoulli
@@ -318,12 +329,12 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
         prior_list[[gvar_name]] <- concat( "dmvnormchol(0,sigma_" , group_var , ",L_Rho_" , group_var , ")" )
         prior_list[[concat("sigma_",group_var)]] <- concat( "dcauchy(0,2)" )
         prior_list[[concat("L_Rho_",group_var)]] <- concat( "dlkjcorrchol(2)" )
-        prior_list_uncorr_members <- apply_build_priors(uncorr_members,group_var)
+        prior_list_uncorr_members <- apply_build_priors(uncorr_members,group_var, matt_trick)
         prior_list <- c(prior_list, prior_list_uncorr_members)
       } else {
-          prior_list_uncorr_members <- apply_build_priors(uncorr_members,group_var)
+          prior_list_uncorr_members <- apply_build_priors(uncorr_members,group_var, matt_trick)
           if (length(corr_members) == 1)
-            prior_list_corr_members <- build_priors(corr_members[[1]], group_var)
+            prior_list_corr_members <- build_priors(corr_members[[1]], group_var, matt_trick)
           prior_list <- c(prior_list, prior_list_corr_members, prior_list_uncorr_members)
       }
         # make sure grouping variables in dat
@@ -370,9 +381,21 @@ glimmer <- function( formula , data , family=gaussian , prefix=c("b_","v_") , de
     names(pf$dat) <- sapply( names(pf$dat) , undot )
     # remove Intercept from dat
     pf$dat[['Intercept']] <- NULL
-    
+
     # result
-    cat(flist_txt)
-    cat("\n")
     invisible(list(f=flist2,d=pf$dat))
+}
+
+stan_lmer <- function(fl , data , family=gaussian , prefix=c("b_","v_") , default_prior="dnorm(0,10)" , file_name=NULL, ... ){
+  if(is.null(file_name)){
+    warning("Generated stan code should go into a file with .stan suffix")
+  }
+  glim_result <- glimmer(fl , data , family=gaussian , prefix=c("b_","v_") , default_prior="dnorm(0,10)" , matt_trick = TRUE,... )
+  stan_code <- map2stan(glim_result$f, glim_result$d, sample=FALSE)
+  if(!is.null(file_name)){
+    filewrite <- file(file_name)
+    writeLines(stan_code$model, filewrite)
+    close(filewrite)
+  }
+  invisible(list(stan_code = stan_code$model, data=stan_code$data))
 }
