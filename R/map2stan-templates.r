@@ -41,7 +41,7 @@ map2stan.templates <- list(
             indent <- "    "
             # get constraints and add <lower=0> for sigma vector
             constr_list <- get( "constraints" , envir=e )
-            prior_name <- get('xvp', envir=e)
+            prior_name <- get('vprior', envir=e)
             n <- concat('N_',prior_name$group)
             prior_name <- prior_name$pars_out
             sigma_name <- as.character( k[[2]] )
